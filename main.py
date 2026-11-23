@@ -1,161 +1,70 @@
 import os
-import asyncio
-import threading
-from flask import Flask
+from flask import Flask, request
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from google import genai
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from groq import Groq
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# --- SETUP ---
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Render gives this automatically
 
-# NEW Google AI library - old one is dead
-client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL_NAME = "gemini-3.8-flash"
-
-def ask_ai(prompt):
-    try:
-        resp = client.models.generate_content(model=MODEL_NAME, contents=prompt)
-        return resp.text
-    except Exception as e:
-        return f"Sorry, AI error: {e}"
-
+client = Groq(api_key=GROQ_API_KEY)
 app = Flask(__name__)
-cgpa_users = {}
 
-@app.route("/")
-def home():
-    return "H&S AI HUB Bot is running!"
+# Build Telegram app
+telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+
+SYSTEM_PROMPT = """You are H&S AI HUB - a professional Nigerian student assistant.
+You help with: CGPA calculation, JAMB, Post-UTME, Cutoff marks, NYSC, CV writing, assignments, study tips, and general questions.
+Be friendly, clear, professional. Use simple English. Use emojis small-small. If user asks CGPA, ask for grades and credits and calculate it.
+Always be helpful like a professional tutor."""
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome to H&S AI HUB!\n\n"
-        "Choose what you want:\n"
-        "/cgpa - Calculate CGPA (easy step-by-step)\n"
-        "/jamb - JAMB guide\n"
-        "/course - Course advice\n"
-        "/cutoff - Cut-off marks\n"
-        "/nysc - NYSC guide\n"
-        "/cv - Build CV\n"
-        "/refer - Earn 500 naira\n"
-        "/myreferrals - Check earnings\n"
-        "/help - Help\n\n"
-        "Or just type any question!"
+        "👋 Welcome to *H&S AI HUB*!\n\nI'm your professional study assistant.\n\nI can help you with:\n✅ CGPA Calculation\n✅ JAMB / Cutoff / Post-UTME\n✅ NYSC Questions\n✅ CV Writing\n✅ Assignments & Study Tips\n\nJust type your question and I will answer.\n\nExample: *Calculate my CGPA* or *What is JAMB cutoff for UNILAG?*",
+        parse_mode="Markdown"
     )
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Tap /start to see all commands.\nFor CGPA, just tap /cgpa and I will guide you one by one.")
-
-async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("H&S AI HUB - Your smart AI assistant built by H&S.")
-
-async def cgpa_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    cgpa_users[user_id] = {"step": "ask_count", "total_courses": 0, "current": 1, "total_points": 0, "total_units": 0, "courses": []}
-    await update.message.reply_text("📊 CGPA CALCULATOR\n\nHow many courses did you offer? Just send the number.\nExample: 5")
-
-async def refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💰 REFER & EARN 500 NAIRA\n\nYour referral link:\nhttps://t.me/HSAIHUB_bot?start=ref_" + str(update.effective_user.id) + "\n\nShare it, when your friend joins you earn 500 naira. Check with /myreferrals")
-
-async def myreferrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 Your referrals: 0\nEarnings: ₦0\n\nShare your link with /refer to start earning!")
-
-async def jamb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📚 JAMB GUIDE\n\nType your question about JAMB, e.g. 'What is JAMB cutoff for UNILAG?'")
-
-async def course(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎓 COURSE ADVICE\n\nTell me your interests and JAMB score, e.g. 'I love science, JAMB 250, what course?'")
-
-async def cutoff(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✂️ CUT-OFF MARKS\n\nType the school name, e.g. 'Cutoff for UNILAG'")
-
-async def nysc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎓 NYSC GUIDE\n\nAsk me anything about NYSC mobilization, camp, PPA, etc.")
-
-async def cv(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📄 CV BUILDER\n\nSend me your name, course, skills and experience, and I will build a professional CV for you.")
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_text = update.message.text.strip()
+    user_text = update.message.text
+    await update.message.chat.send_action("typing")
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_text}
+            ],
+            temperature=0.7,
+            max_tokens=1000
+        )
+        reply = response.choices[0].message.content
+        await update.message.reply_text(reply)
+    except Exception as e:
+        print(f"Groq Error: {e}")
+        await update.message.reply_text("Sorry, I'm having a small issue. Please try again in a few seconds 🙏")
 
-    if user_id in cgpa_users:
-        state = cgpa_users[user_id]
-        grade_points = {'A':5, 'B':4, 'C':3, 'D':2, 'E':1, 'F':0}
-        if state["step"] == "ask_count":
-            try:
-                n = int(user_text)
-                if n <= 0 or n > 20:
-                    await update.message.reply_text("Please send a number between 1 and 20")
-                    return
-                state["total_courses"] = n
-                state["step"] = "ask_grade"
-                await update.message.reply_text(f"Good! You have {n} courses.\n\nCourse 1: What GRADE? Send A, B, C, D, E or F")
-                return
-            except:
-                await update.message.reply_text("Please send only a number. Example: 5")
-                return
-        if state["step"] == "ask_grade":
-            grade = user_text.upper()
-            if grade not in grade_points:
-                await update.message.reply_text("Please send only A, B, C, D, E or F")
-                return
-            state["temp_grade"] = grade
-            state["step"] = "ask_unit"
-            await update.message.reply_text(f"Course {state['current']}: Grade {grade} ✅\n\nHow many UNITS? Example: 3")
-            return
-        if state["step"] == "ask_unit":
-            try:
-                unit = int(user_text)
-                grade = state["temp_grade"]
-                points = grade_points[grade] * unit
-                state["total_points"] += points
-                state["total_units"] += unit
-                state["courses"].append(f"Course {state['current']}: {grade} ({unit} units) = {points} pts")
-                if state["current"] >= state["total_courses"]:
-                    cgpa = state["total_points"] / state["total_units"] if state["total_units"] else 0
-                    msg = "📊 YOUR RESULT:\n\n" + "\n".join(state["courses"]) + f"\n\nTotal Units: {state['total_units']}\nTotal Points: {state['total_points']}\n\n🎓 CGPA: {cgpa:.2f} / 5.00"
-                    if cgpa >= 4.5: msg += "\n\n🏆 First Class! Excellent!"
-                    elif cgpa >= 3.5: msg += "\n\n🥈 Second Class Upper!"
-                    elif cgpa >= 2.5: msg += "\n\n🥉 Second Class Lower!"
-                    elif cgpa >= 1.5: msg += "\n\n📚 Third Class"
-                    else: msg += "\n\n💪 Don't give up!"
-                    await update.message.reply_text(msg)
-                    del cgpa_users[user_id]
-                    return
-                else:
-                    state["current"] += 1
-                    state["step"] = "ask_grade"
-                    await update.message.reply_text(f"Saved! ✅\n\nCourse {state['current']}: What GRADE? Send A/B/C/D/E/F")
-                    return
-            except:
-                await update.message.reply_text("Please send only a number for units. Example: 3")
-                return
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    await update.message.reply_text("Thinking... 🤔")
-    answer = await asyncio.to_thread(ask_ai, user_text)
-    await update.message.reply_text(answer[:4000])
+@app.route("/")
+def home():
+    return "H&S AI HUB Bot is Running ✅"
 
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+    telegram_app.update_queue.put_nowait(update)
+    return "ok"
 
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    threading.Thread(target=run_flask, daemon=True).start()
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_cmd))
-    application.add_handler(CommandHandler("about", about))
-    application.add_handler(CommandHandler("cgpa", cgpa_start))
-    application.add_handler(CommandHandler("refer", refer))
-    application.add_handler(CommandHandler("myreferrals", myreferrals))
-    application.add_handler(CommandHandler("jamb", jamb))
-    application.add_handler(CommandHandler("course", course))
-    application.add_handler(CommandHandler("cutoff", cutoff))
-    application.add_handler(CommandHandler("nysc", nysc))
-    application.add_handler(CommandHandler("cv", cv))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("H&S AI HUB Bot is running...")
-    application.run_polling()
+    import asyncio
+    async def setup():
+        await telegram_app.initialize()
+        if WEBHOOK_URL:
+            await telegram_app.bot.set_webhook(url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}")
+        await telegram_app.start()
+    asyncio.run(setup())
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
