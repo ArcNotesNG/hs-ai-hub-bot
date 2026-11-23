@@ -4,18 +4,23 @@ import threading
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-import google.generativeai as genai
+from google import genai
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-genai.configure(api_key=GEMINI_API_KEY)
-# FIXED: Old 2.0 is dead, use new 3.0
-model = genai.GenerativeModel("gemini-2.5-flash")
+# NEW Google AI library - old one is dead
+client = genai.Client(api_key=GEMINI_API_KEY)
+MODEL_NAME = "gemini-3.8-flash"
+
+def ask_ai(prompt):
+    try:
+        resp = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+        return resp.text
+    except Exception as e:
+        return f"Sorry, AI error: {e}"
 
 app = Flask(__name__)
-
-# CGPA state: user_id -> {"step":..., "total_courses":..., "current":..., "total_points":..., "total_units":...}
 cgpa_users = {}
 
 @app.route("/")
@@ -39,16 +44,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Tap /start to see all commands.\n\nFor CGPA, just tap /cgpa and I will guide you one by one.")
+    await update.message.reply_text("Tap /start to see all commands.\nFor CGPA, just tap /cgpa and I will guide you one by one.")
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("H&S AI HUB - Your smart AI assistant built by H&S.")
 
-# --- CGPA NEW EASY WAY ---
 async def cgpa_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     cgpa_users[user_id] = {"step": "ask_count", "total_courses": 0, "current": 1, "total_points": 0, "total_units": 0, "courses": []}
-    await update.message.reply_text("📊 CGPA CALCULATOR\n\nHow many courses did you offer this semester? Just send the number.\nExample: 5")
+    await update.message.reply_text("📊 CGPA CALCULATOR\n\nHow many courses did you offer? Just send the number.\nExample: 5")
 
 async def refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("💰 REFER & EARN 500 NAIRA\n\nYour referral link:\nhttps://t.me/HSAIHUB_bot?start=ref_" + str(update.effective_user.id) + "\n\nShare it, when your friend joins you earn 500 naira. Check with /myreferrals")
@@ -57,13 +61,13 @@ async def myreferrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📊 Your referrals: 0\nEarnings: ₦0\n\nShare your link with /refer to start earning!")
 
 async def jamb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📚 JAMB GUIDE\n\nType your question about JAMB, e.g. 'What is JAMB cutoff for UNILAG?' and I will answer with AI.")
+    await update.message.reply_text("📚 JAMB GUIDE\n\nType your question about JAMB, e.g. 'What is JAMB cutoff for UNILAG?'")
 
 async def course(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎓 COURSE ADVICE\n\nTell me your interests and JAMB score, e.g. 'I love science, JAMB 250, what course?'")
 
 async def cutoff(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✂️ CUT-OFF MARKS\n\nType the school name, e.g. 'Cutoff for UNILAG' and I will tell you.")
+    await update.message.reply_text("✂️ CUT-OFF MARKS\n\nType the school name, e.g. 'Cutoff for UNILAG'")
 
 async def nysc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎓 NYSC GUIDE\n\nAsk me anything about NYSC mobilization, camp, PPA, etc.")
@@ -75,11 +79,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text.strip()
 
-    # CGPA FLOW
     if user_id in cgpa_users:
         state = cgpa_users[user_id]
         grade_points = {'A':5, 'B':4, 'C':3, 'D':2, 'E':1, 'F':0}
-
         if state["step"] == "ask_count":
             try:
                 n = int(user_text)
@@ -88,12 +90,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 state["total_courses"] = n
                 state["step"] = "ask_grade"
-                await update.message.reply_text(f"Good! You have {n} courses.\n\nCourse 1: What GRADE did you get? Send A, B, C, D, E or F")
+                await update.message.reply_text(f"Good! You have {n} courses.\n\nCourse 1: What GRADE? Send A, B, C, D, E or F")
                 return
             except:
                 await update.message.reply_text("Please send only a number. Example: 5")
                 return
-
         if state["step"] == "ask_grade":
             grade = user_text.upper()
             if grade not in grade_points:
@@ -101,9 +102,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             state["temp_grade"] = grade
             state["step"] = "ask_unit"
-            await update.message.reply_text(f"Course {state['current']}: Grade {grade} ✅\n\nHow many UNITS is this course? Example: 3")
+            await update.message.reply_text(f"Course {state['current']}: Grade {grade} ✅\n\nHow many UNITS? Example: 3")
             return
-
         if state["step"] == "ask_unit":
             try:
                 unit = int(user_text)
@@ -132,13 +132,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Please send only a number for units. Example: 3")
                 return
 
-    # NORMAL AI
     await update.message.reply_text("Thinking... 🤔")
-    try:
-        response = model.generate_content(user_text)
-        await update.message.reply_text(response.text[:4000])
-    except Exception as e:
-        await update.message.reply_text(f"Sorry, error: {e}")
+    answer = await asyncio.to_thread(ask_ai, user_text)
+    await update.message.reply_text(answer[:4000])
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
