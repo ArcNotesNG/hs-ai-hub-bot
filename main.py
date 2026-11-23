@@ -1,4 +1,5 @@
 import os
+import asyncio
 import threading
 from flask import Flask
 from telegram import Update
@@ -47,7 +48,11 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    # Flask in background thread, Bot in MAIN thread - this fixes polling
+    # FIX for Python 3.14 - create event loop manually
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    # Flask in background, Bot in MAIN thread
     threading.Thread(target=run_flask, daemon=True).start()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
