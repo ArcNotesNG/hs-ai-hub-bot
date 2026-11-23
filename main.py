@@ -1,5 +1,4 @@
 import os
-import asyncio
 import threading
 from flask import Flask
 from telegram import Update
@@ -43,10 +42,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Sorry, error: {e}")
 
-def run_bot():
-    # Fix for Flask + Telegram event loop error
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    # Flask in background thread, Bot in MAIN thread - this fixes polling
+    threading.Thread(target=run_flask, daemon=True).start()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_cmd))
@@ -54,8 +56,3 @@ def run_bot():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("H&S AI HUB Bot is running...")
     application.run_polling()
-
-if __name__ == "__main__":
-    threading.Thread(target=run_bot, daemon=True).start()
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
